@@ -1,0 +1,411 @@
+---
+title: "Demographic history"
+author: "Margaux Lefebvre"
+date: "`r Sys.Date()`"
+output:
+  github_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,eval = FALSE) #prevent all chunks from running
+library(tidyverse)
+```
+
+# Nucleotide diversity (pi)
+
+## Make standardized sample size
+
+Version: R v4.2.
+
+To not have a biased estimators, it's better to have minimum 10 samples ([paper here](https://doi.org/10.1002/ece3.1846)).
+
+```{r}
+library(readr)
+bams_infos <- read_delim("./Data/list_bams.noPL.txt", 
+    delim = "\t", escape_double = FALSE, 
+    col_names = c("path"), trim_ws = TRUE)
+samples_infos <- read_delim("./Data/list_samples.noPL.txt", 
+    delim = "\t", escape_double = FALSE, 
+    col_names = c("sample_ID"), trim_ws = TRUE)
+info_path<-cbind(samples_infos, bams_infos)
+
+# add meta information
+Samples_data<-read_delim("metadata_vivaxsimium.csv", 
+     delim = "\t", show_col_types = FALSE)
+Samples_data<-Samples_data[,-c(3:8,10:15,17)]
+colnames(Samples_data)<-c("sample_ID","species","country","population","cluster")
+info<-inner_join(bams_infos,Samples_data)
+
+# Which populations do we keep ?
+min_size<-10
+
+number_data<-info %>% 
+  group_by(country) %>%
+  summarise(N = length(country))
+
+kept_populations<-subset(number_data, number_data$N>=min_size)
+kept_populations
+
+# Make the file for each pop, keeping sample at random
+for (pop in kept_populations$country){
+  temp<-subset(info, info$country==pop)
+  samples_kept<-temp[sample(nrow(temp), min_size), ]
+  write_tsv(as.data.frame(samples_kept$path), file = paste0("./Data/list_bams_",pop,".10.stand.txt"), col_names = F)
+}
+```
+
+Of course, *P. simium* is considered as a separate population from *P. vivax*.
+
+# Calculation of pi
+
+Version: bcftools v1.16, pixy v01.2.7.
+
+```{bash}
+# First create a VCF with variant and invariant sites
+POPULATION=(Afghanistan_vivax Brazil_vivax Colombia_vivax Ethiopia_vivax French_Guiana_vivax India_vivax Mauritania_vivax Peru_vivax Thailand_vivax Venezuela_vivax Brazil_simium)
+for POP in ${POPULATION[@]}
+do
+bcftools mpileup -f PL.ancestral.fa.gz -b list_bams_$POP.stand.txt -R vivax_core_genome.bcf.txt | bcftools call -m -Oz -f GQ -o $POP.10.allsites.vcf.gz
+tabix $POP.10.allsites.vcf.gz
+done
+
+# Calculate pi with pixy
+for POP in ${POPULATION[@]}
+do
+bcftools query -l $POP.10.allsites.vcf.gz > $POP.10.pop.txt
+sed -i "s/$/\tPOP/" $POP.10.pop.txt
+pixy --stats pi --vcf $POP.10.allsites.vcf.gz --populations $POP.10.pop.txt --window_size 500 --n_cores 12 --output_prefix $POP.10
+done
+```
+
+# Plot and test for significant difference
+
+Version: R v4.2.
+
+```{r}
+library(rstatix)
+library(tidyverse)
+library(qqplotr)
+library(MASS)
+
+### Read the data
+pop <- "Afghanistan_vivax"
+path<-paste0("./Data/",pop,".10_pi.txt")
+data_diversity <- read_table(path)
+data_diversity$cluster<-pop
+
+POP=c("Brazil_vivax", "Colombia_vivax", "Ethiopia_vivax", "French_Guiana_vivax", "India_vivax", "Mauritania_vivax", "Peru_vivax", "Thailand_vivax", "Venezuela_vivax", "Brazil_simium")
+for (pop in POP){
+  path<-paste0("./Data/",pop,".10_pi.txt")
+div_temp <- read_table(path)
+div_temp$cluster<-pop
+  total_diversity<-rbind(total_diversity,div_temp)
+}
+
+### Plot
+total_diversity$cluster<-factor(total_diversity$cluster, levels=rev(c("Thailand_vivax","India_vivax","Afghanistan_vivax","Ethiopia_vivax", "Mauritania_vivax", "Brazil_vivax", "French_Guiana_vivax",  "Peru_vivax", "Venezuela_vivax","Colombia_vivax", "Brazil_simium")))
+p <- ggplot(total_diversity, aes(x=avg_pi, y=cluster, fill=cluster), color="black")+
+  geom_violin(width=0.8) +
+  geom_boxplot(width=0.2, alpha=0.5, outlier.size=1, outlier.alpha = 1)+
+  ylab("")+ xlim(c(0,0.005)) +
+  xlab("Nucleotid diversity (\u03c0)")+ 
+  scale_fill_manual(values = rev(c("#C65D7B","#C40018","#F76E11","#5C8D89","#4CBB17","#252440","#014ba0", "#0303b5", "#2f2c79","#73C2FB",  "#5D3FD3")))+
+    stat_summary(fun.y=mean, geom="point", shape=23, size=2, color="black", fill="black") +
+  theme_bw()+ 
+  theme(
+    panel.spacing.y = unit(0.1, "lines"),
+    axis.text.x = element_text(size = 15),
+    axis.title.x = element_text(size = 20),
+    axis.text.y = element_text(size = 15),
+    axis.title.y = element_text(size = 20),
+    legend.position = "none"
+  )
+p
+
+# Test if distribution is normal
+total_diversity %>%
+  ggplot(aes(sample = avg_pi)) +
+     stat_qq_band() +
+ stat_qq_line() +
+ stat_qq_point()+ labs(x = "Theoretical Quantiles", y = "Sample Quantiles")+ ggtitle("QQ plot for \u03c0 values")+
+  facet_wrap(~cluster, scales = "free_y")+theme_bw()
+
+### Test if difference are significant (Wilcox test beacause the distribution is not normal)
+knitr::kable(total_diversity %>% 
+  wilcox_test(avg_pi ~ cluster, p.adjust.method = "bonferroni"))
+```
+
+# Coalescence with Relate 
+
+Version: bcftools v1.10.2, ANGSD v0.940, R v4.2, vcftools v0.1.16, Relate v1.1.9.
+
+## Preparing the input files
+
+First, I have to separate each chromosome, "phasing", and create hap/sample/legend files.
+
+```{bash}
+echo "--> Start processing chromosome: $CHR" #Deal with each chromosome separated
+
+# Calling with ANGSD to have all the sites (only in the core genome), and only P. vivax and P. simium samples
+angsd -b list_bams.noPL.txt -ref P.vivax-PvP01_reference_genome.fasta -out temp_$CHR \
+-r core_${CHR}.txt \
+-minMapQ 20 -minQ 20 -minInd 5 -setMinDepth 5 -setMaxDepthInd 152 -doCounts 1 \
+-nThreads 4 -gl 1 -dopost 1 -domajorminor 1 -domaf 1 -dobcf 1 --ignore-RG 0 -dogeno 1
+
+# "Phasing the data" but it's artificial since it's haploid
+bcftools view temp_$CHR.bcf.gz \
+--output-type z --output-file VivaxSimium_${CHR}.vcf.gz
+tabix VivaxSimium_${CHR}.vcf.gz
+
+zcat VivaxSimium_${CHR}.vcf.gz | grep '^#' > VivaxSimium_${CHR}.vcf.header
+zcat VivaxSimium_${CHR}.vcf.gz | grep -v '^#' > VivaxSimium_${CHR}.vcf.body
+
+sed -e "s/\//|/g" VivaxSimium_${CHR}.vcf.body > out.VivaxSimium_${CHR}.vcf.body
+
+# combine the new bcf body with the old header
+cat VivaxSimium_${CHR}.vcf.header out.VivaxSimium_${CHR}.vcf.body | bgzip -c > VivaxSimium_${CHR}.phase.vcf.gz
+rm VivaxSimium_${CHR}.vcf.* # remove intermediate files
+rm  out.VivaxSimium_${CHR}.vcf.body
+
+# Make the hap/sample/legend files
+bcftools convert VivaxSimium_${CHR}.phase.vcf.gz --haplegendsample VivaxSimium_hap_${CHR}
+
+#Calculate the proportion of missing data for each sample
+vcftools --gzvcf VivaxSimium_${CHR}.vcf.gz --missing-indv --out sample_${CHR} 
+```
+
+Add the proportion of missing data to the sample file
+```{r}
+ARR_CHR=c("01","02","03","04","05","06","07","08","09","10","11","12","13","14")
+for (chr in ARR_CHR){
+  ind_miss  <- read_delim(paste0("./Data/sample_",chr,".imiss"), delim = "\t",
+                        col_names = c("ID", "ndata", "nfiltered", "nmiss", "fmiss"), skip = 1)
+ID_1<-c(ind_miss$ID)
+ID_2<-c(ind_miss$ID)
+missing<-c(ind_miss$fmiss)
+temp_sample<-cbind(ID_1, ID_2, missing)
+write.table(temp_sample, paste0("./Data/VivaxSimium_hap_",chr,".sample"), quote = FALSE, row.names = FALSE)
+}
+```
+
+Convert from hap/legend/sample to haps/sample
+```{bash}
+echo "--> Start processing chromosome: $CHR" #Deal with each chromosome separated
+
+RelateFileFormats --mode ConvertFromHapLegendSample --chr ${CHR} \
+                 --haps VivaxSimium_${CHR}.haps \
+                 --sample sample_${CHR}.sample \
+                 -i VivaxSimium_hap_${CHR}
+```
+
+File for the outgroup to polarize the samples:
+```{bash}
+echo "--> Start processing chromosome: $CHR" #Deal with each chromosome separated
+
+angsd -b PL.list.txt -out PL_${CHR}.ancestral \
+        -r PvP01_${CHR}_v1 \
+        -minMapQ 20 -minQ 20 -setMaxDepthInd 152 -doCounts 1 \
+        -doFasta 2
+```
+
+The mask file is created based on the coregenome as defined by [Daron et *al.* (2017)](0.1126/sciadv.abc3713).
+
+Create pop labels file (space delimited), with 4 columns: ID POP GROUP SEX
+```{r}
+library(readr)
+VivaxSimium_samples <- read_table("./Data/haplegsam/sample_01.sample")
+VivaxSimium_samples <-VivaxSimium_samples[,1]
+colnames(VivaxSimium_samples)<-"ID"
+
+lis_bams<-read_csv("./Data/list_samples_order.txt", 
+    col_names = "ID")
+## Add meta data
+Samples_data<-read_delim("metadata_vivaxsimium.tsv", 
+     delim = "\t", show_col_types = FALSE)
+Samples_data<-Samples_data[,c(1,9,16)]
+colnames(Samples_data)<-c("ID","POP","GROUP")
+poplabels<-inner_join(lis_bams,Samples_data)
+poplabels$POP <- sub(" ", "_", poplabels$POP)
+poplabels$GROUP <- sub(" ", "_", poplabels$GROUP)
+poplabels$GROUP <- sub(" ", "_", poplabels$GROUP)
+poplabels$SEX <- NA
+poplabels$ID<-VivaxSimium_samples$ID_1[-1]
+
+write.table(poplabels, paste0("./Data/VivaxSimium.poplabels"), quote = FALSE, row.names = FALSE)
+```
+
+Prepare the input files
+```{bash}
+echo "--> Start processing chromosome: $CHR" #Deal with each chromosome separated
+
+./scripts/PrepareInputFiles/PrepareInputFiles.sh \
+                 --haps VivaxSimium_${CHR}.haps \
+                 --sample sample_${CHR}.sample \
+                 --ancestor PL_${CHR}.ancestral.fa \
+                 --mask mask_${CHR}.fa \
+                 --poplabels VivaxSimium.poplabels \
+                 -o ./VivaxSimium_${CHR}_input
+                 
+./bin/Relate \
+      --mode All -m 6.43333e-9 -N 20000 \
+      --haps "./VivaxSimium_${CHR}_input.haps.gz" \
+      --sample "./VivaxSimium_${CHR}_input.sample.gz" \
+      --map "./Genetic_map_VivaxSimium_${CHR}.txt" \
+      --annot "./VivaxSimium_${CHR}_input.annot" \
+      --dist "./VivaxSimium_${CHR}_input.dist.gz" \
+      -o VivaxSimium_relate_${CHR}
+```
+
+## Infer coalescence rates
+
+Version: Relate v1.1.9, R v4.2.
+
+```{bash}
+./scripts/EstimatePopulationSize/EstimatePopulationSize.sh \
+-i "VivaxSimium_relate" \
+-o "est_size_iter" \
+-m 6.43333e-9 \
+--chr "./chromosome_list.txt" \
+--poplabels "VivaxSimium.poplabels"
+--bins 0,7,0.25 \
+--years_per_gen 0.18 
+
+${PATH_TO_RELATE}/bin/RelateCoalescentRate \
+--mode EstimatePopulationSize \
+-i "est_size_iter" \
+-o "est_size_total" \
+--bins 0,7,0.25 \
+--years_per_gen 0.18 \
+--chr "./chromosome_list.txt" \
+--poplabels "VivaxSimium.poplabels"
+```
+
+Plot
+```{r}
+library(relater)
+library(ggplot2)
+library(tidyverse)
+coal <- read.coal("./Data/est_size_total.coal")
+#haploid effective population size is the 1* inverse coalescence rate
+coal$popsize <- 1/coal$haploid.coalescence.rate
+#multiply epochs times by 0.18 to scale to years (assuming 0.18 years per generation)
+coal$epoch.start <- 0.18 * coal$epoch.start
+head(coal) #contains all vs all coalescence rates
+#We subset to within group coalescence rates, but feel free to look at cross-population rates too
+coal <- subset(coal, group1 == group2)
+unique(coal$group1)
+Cluster<- rep(NA, length(coal$group1))
+Cluster[grep("Afghanistanvivax", coal$group1)] <- "Asia & Africa"
+Cluster[grep("Indiavivax", coal$group1)] <- "Asia & Africa"
+Cluster[grep("Brazilvivax", coal$group1)] <- "Latin America"
+Cluster[grep("Ecuadorvivax", coal$group1)] <- "Latin America"
+Cluster[grep("Guyanavivax", coal$group1)] <- "Latin America"
+Cluster[grep("French_Guianavivax", coal$group1)] <- "Latin America"
+Cluster[grep("Hondurasvivax", coal$group1)] <- "Latin America"
+Cluster[grep("Colombiavivax", coal$group1)] <- "Latin America"
+Cluster[grep("Mexicovivax", coal$group1)] <- "Latin America"
+Cluster[grep("Peruvivax", coal$group1)] <- "Latin America"
+Cluster[grep("Venezuelavivax", coal$group1)] <- "Latin America"
+Cluster[grep("Thailandvivax", coal$group1)] <- "Asia & Africa"
+Cluster[grep("Indonesiavivax", coal$group1)] <- "Asia & Africa"
+Cluster[grep("Ethiopiavivax", coal$group1)] <- "Asia & Africa"
+Cluster[grep("Mauritaniavivax", coal$group1)] <- "Asia & Africa"
+Cluster[grep("Brazilsimium", coal$group1)] <- "P.simium"
+coal<-cbind(coal, Cluster)
+
+coal %>%
+  ggplot( aes(x=epoch.start, y=1/haploid.coalescence.rate)) +
+    annotation_logticks(short = unit(1, "npc"), mid = unit(1, "npc"), long = unit(1,"npc"), color="grey",alpha = 0.2)  +
+    geom_step( data=coal  %>% dplyr::select(-Cluster), aes(group=group1), color="black", size=0.5, alpha=0.2) +
+    geom_step( aes(color=group2), size=1.2 )+theme_bw()+
+ theme(panel.grid = element_blank(), panel.background = element_blank(),
+      axis.text.x = element_text(size = 11),
+      axis.text.y = element_text(size = 11),
+      axis.title.y = element_text(size=15),
+     axis.title.x = element_text(size=15),
+     strip.text = element_text(size = 12))+
+  scale_x_log10(labels=scales::comma, sec.axis = sec_axis(~./0.18, name = expression(Generation~ago~(log[10]~scale~with~5.5~generations/year)), labels=scales::comma))+
+  scale_y_log10(labels=scales::comma)+
+    facet_wrap(Cluster~., ncol = 1, strip.position = "top")+
+  xlab(expression(Years~ago~(log[10]~ scale)))+
+  ylab(expression(Ne~(log[10]~ scale)))+ coord_cartesian(xlim =c(10, 1e5), ylim = c(1e3, 10e4))+
+  scale_color_manual(values = c("#F76E11","#0E4C92","#3f6cd3","royalblue","navyblue","#5C8D89","#4D516D","#6F8FAF","#A4EBF3","#C40018","#9C297F","#4E944F","#73C2FB","#4682B4","#C65D7B","#22577E"))+
+  scale_fill_manual(values = c("#F76E11","#0E4C92","#3f6cd3","royalblue","navyblue","#5C8D89","#4D516D","#6F8FAF","#A4EBF3","#C40018","#9C297F","#4E944F","#73C2FB","#4682B4","#C65D7B","#22577E"))
+```
+
+# Isolation dynamics and migration rate changes over time with MSMC-IM
+
+Version: Python v3.9, R v4.2.
+
+## Create input files
+
+The scripts for converting results from Relate to MSMC-IM was kindly provided by Dr. E. Patin and Dr. D. Liu from the Human Evolutionary Genetics team at the Institut Pasteur in Paris.
+
+## Run MSMC-IM
+
+```{bash}
+# Example with RJ cluster vs human P. vivax from Brazil and Mexico
+python ~/Softwares/MSMC-IM/MSMC_IM.py -mu 6.43e-9 -o $path_data/Brazil_simiumRJ.im --printfittingdetails --plotfittingdetails --xlog --ylog -p 24*1+1*2 -N1 60000 -N2 20000 $path_data/Brazilvivax-simiumN.txt
+
+python ~/Softwares/MSMC-IM/MSMC_IM.py -mu 6.43e-9 -o $path_data/Mexico_simiumRJ.im --printfittingdetails --plotfittingdetails --xlog --ylog -p 24*1+1*2 -N1 35000 -N2 20000 $path_data/Mexicovivax-simiumN.txt
+```
+
+Make summary file
+```{bash}
+echo -e "pair\ttgens\tm\tM\tMSMCrCCR" > summary_mMrCCR.2.txt
+for F in *estimates.txt; do
+file=$F
+file_prefix=$(basename $file .estimates.txt)
+pair=$(basename $file .b1_1e-08.b2_1e-06.MSMC_IM.estimates.txt)
+join -j 2 -o 1.1,1.2,1.3,1.4,2.3 <(tail -n +2 $file | awk -v pair=$pair '{print pair"\t"$1"\t"$4"\t"$5}') <(tail -n +4 ${file_prefix}.fittingdetails.txt | awk -v pair=$pair '{print pair"\t"$1"\t"$9}') | awk '{print $1"\t"$2"\t"$3"\t"$4"\t"$5}' >> summary_mMrCCR.2.txt
+done
+```
+
+## Plot
+
+```{r}
+library(readr)
+library(scales)
+summary_df<- read_delim("summary_mMrCCR.2.txt", 
+     delim = "\t", escape_double = FALSE, 
+     trim_ws = TRUE)
+
+summary_df$years<-summary_df$tgens*0.18 # convert generations in years
+
+# Plot of CCR and cumulative migration probability
+summary_df %>%
+  ggplot( aes(x=years,y=M))  +
+    annotation_logticks(short = unit(1, "npc"), mid = unit(1, "npc"), long = unit(1,"npc"), color="grey",alpha=0.5) +
+  geom_area( fill="#69b3a2", alpha=0.8) +
+  geom_line(color="#69b3a2") +
+    geom_step( aes(y=MSMCrCCR), linetype="dashed")+
+  theme_bw() +
+  scale_x_log10(labels=scales::comma, limits=c(1,100000), sec.axis = sec_axis(~./0.18, name = expression(Generation~ago~(log[10]~scale~with~5.5~generations/year)), labels=scales::comma),breaks = trans_breaks("log10", function(x) 10^x))+
+  xlab(expression(Years~ago~(log[10]~ scale)))+
+    facet_wrap(pair~., ncol = 1, strip.position = "right")+
+ theme(panel.grid = element_blank(), panel.background = element_blank(),
+      axis.text.x = element_text(size = 11),
+      axis.text.y = element_text(size = 11),
+      axis.title.y = element_text(size=15),
+     axis.title.x = element_text(size=15),
+     strip.text = element_text(size = 12))+ylim(c(0,1))
+
+# Plot of symmetric migration rates
+medata <- summary_df%>% group_by(pair)%>%summarise(median_val=median(m))
+
+summary_df %>%
+  ggplot( aes(x=years,y=m))  +
+    annotation_logticks(short = unit(1, "npc"), mid = unit(1, "npc"), long = unit(1,"npc"), color="grey",alpha=0.5) +
+  geom_step(color="#69b3a2") +
+  theme_bw() +
+  scale_x_log10(labels=scales::comma, limits=c(1,100000), sec.axis = sec_axis(~./0.18, name = expression(Generation~ago~(log[10]~scale~with~5.5~generations/year)), labels=scales::comma),breaks = trans_breaks("log10", function(x) 10^x))+
+  xlab(expression(Years~ago~(log[10]~ scale)))+
+  geom_vline(data= medata, aes(xintercept = median_val))+
+    facet_wrap(pair~., ncol = 1, strip.position = "right")+
+ theme(panel.grid = element_blank(), panel.background = element_blank(),
+      axis.text.x = element_text(size = 11),
+      axis.text.y = element_text(size = 11),
+      axis.title.y = element_text(size=15),
+     axis.title.x = element_text(size=15),
+     strip.text = element_text(size = 12))
+```
