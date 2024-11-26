@@ -178,7 +178,7 @@ list_samples<-as.data.frame(V(network))
 list_samples$sample_ID<-rownames(list_samples)
 # add meta information
 library(tidyverse)
-metadata_simium <- read_delim("./metadata_vivaxsimium.csv", 
+metadata_simium <- read_delim("./metadata_vivaxsimium.tsv", 
     delim = "\t", quote = "\\\"", escape_double = FALSE, 
     trim_ws = TRUE)
 metadata_simium<-metadata_simium[,c(2,3,18,17)]
