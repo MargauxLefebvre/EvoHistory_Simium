@@ -1,0 +1,491 @@
+---
+title: "Genome scans for selection"
+author: "Margaux Lefebvre"
+date: "`r Sys.Date()`"
+output:
+  github_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,eval = FALSE) #prevent all chunks from running
+library(tidyverse)
+```
+
+# Haplotype-based tests (*iHS*,*XP-EHH* and *Rsb*)
+
+## Prepare the VCF
+
+Version: vcftools v0.1.16.
+
+```{bash}
+ARR_CHR=(01 02 03 04 05 06 07 08 09 10 11 12 13 14)
+ARR_POP=(Simium BrazilVivax)
+for POP in ${ARR_POP[@]}
+do
+for CHR in ${ARR_CHR[@]}
+do
+# Split by population and by chromosome
+vcftools --gzvcf VivaxSimium_filtered_final.ploidy2.vcf.gz --keep $POP.samples.txt --chr PvP01_${CHR}_v1 --recode --stdout | bgzip -c > $POP.$CHR.vcf.gz
+# Polarize the alleles by P. vivax-like
+vcfdo polarize -i $POP.$CHR.vcf.gz -f PL.ancestral.fa | bgzip > $POP.$CHR.AA.vcf.gz
+done
+done
+```
+
+## Read the vcfs
+
+Version: R v4.2.
+
+```{r}
+library(vcfR)
+library(rehh)
+library(tidyverse)
+
+REGION<-c("Simium","Brazil")
+chr <- c("01","02","03","04","05","06","07","08","09","10","11","12","13","14")
+for (pop in REGION){
+for (i in chr){
+  file <- paste0(pop,".",i,".AA.vcf.gz")
+  hh <- data2haplohh(hap_file = file, polarize_vcf = T, vcf_reader = "vcfR", allele_coding = "01", min_perc_geno.mrk=50) # read the data
+  scan <- scan_hh(hh, phased = T, polarized = T) # scan the chromosome
+  id <- paste0("scan_",i)
+  assign(id, scan)
+}
+scan_total <- rbind(scan_01, scan_02, scan_03, scan_04, scan_05, scan_06, scan_07,scan_08, scan_09, scan_10, scan_11, scan_12, scan_13, scan_14) # Gather all the chromosomes
+path<-paste0("/scan_",pop,".txt")
+write_tsv(scan_total, path)
+}
+```
+
+## *iHS*
+
+Version: R v4.2.
+
+```{r}
+library(rehh)
+scan<- read_delim("scan_Simium.txt", "\t", escape_double = FALSE, trim_ws = TRUE)
+  iHS <- ihh2ihs(scan, freqbin = 1, min_maf = 0.01) #I apply a MAF filter because these SNPs are poorly informative and could generate noise in the results (Sabeti et al. 2007; Pearson et al. 2016).
+  data_iHS<-iHS$ihs
+  data_iHS<-na.omit(data_iHS)
+  
+  # make an outlier column in the data.frame
+  for (i in 1:length(data_iHS$LOGPVALUE)) {
+    if (data_iHS$LOGPVALUE[i] > 4) {data_iHS$STATUT[i] <- "outlier"}
+    else {data_iHS$STATUT[i] <- "background"}
+  }
+  
+  
+highlight<-subset(data_iHS, data_iHS$STATUT=="outlier")
+write_tsv(as.data.frame(cbind(highlight$CHR, highlight$POSITION)), "iHS_Simium.txt")
+    data_iHS$CHR<-as.numeric(as.factor(data_iHS$CHR))
+    
+ #Plot
+    data_iHS$CHR<-as.numeric(as.factor(data_iHS$CHR))
+  data_cum <-  data_iHS %>% 
+    group_by(CHR) %>% 
+    summarise(max_bp = max(POSITION)) %>% 
+    mutate(bp_add = lag(cumsum(max_bp), default = 0)) %>% 
+    select(CHR, bp_add)
+   data_iHS <-  data_iHS %>% 
+    inner_join(data_cum, by = "CHR") %>% 
+    mutate(bp_cum = POSITION + bp_add)
+  
+  axis_set <-  data_iHS %>% 
+    group_by(CHR) %>% 
+    summarize(center = median(bp_cum))
+  
+  highlight<-subset( data_iHS,  data_iHS$STATUT=="outlier")
+  
+  p1<-ggplot(data_iHS, aes(x = bp_cum, y =LOGPVALUE,color = as_factor(CHR))) +
+    geom_point(alpha = 0.75) +
+    geom_hline(yintercept = 4, color = "grey40", linetype = "dashed") + 
+    scale_x_continuous(label = axis_set$CHR, breaks = axis_set$center) +
+    scale_color_manual(values = rep(c("lightskyblue", "lightsteelblue"), unique(length(axis_set$CHR))))+
+    labs(x = "Chromosomes", y = "-log(p-value)") + 
+    theme_minimal() +
+    theme( 
+      legend.position = "none",
+      panel.border = element_blank(),
+      panel.grid.major.x = element_blank(),
+      panel.grid.minor.x = element_blank(),
+      axis.text.x = element_text())
+  title<-paste0("iHS for P. simium")
+  p2<-p1+geom_point(data=highlight, aes(x = bp_cum, y =LOGPVALUE), color = "firebrick1", alpha= 0.8)+ggtitle(title)
+p2
+```
+
+## *XP-EHH*
+
+Version: R v4.2.
+
+```{r}
+ scan_Simium <- read_delim("scan_Simium.txt", "\t", escape_double = FALSE, trim_ws = TRUE)
+  scan_Braz <- read_delim("scan_Brazil.txt", "\t", escape_double = FALSE, trim_ws = TRUE)
+    
+    xpehh.Simium_Braz <- ies2xpehh(scan_pop1 =  scan_Simium,
+                                 scan_pop2 =  scan_Braz,
+                                 popname1 = "Simium",
+                                 popname2 = "Brazil")
+    
+     xpehh.Simium_Braz<-na.omit(xpehh.Simium_Braz)
+    # make an outlier column in the data.frame (only SNPs that present a mark of selection in SAM : negative xpehh value + significant p-value)
+    for (i in 1:length( xpehh.Simium_Braz$LOGPVALUE)) {
+      if ((xpehh.Simium_Braz$LOGPVALUE[i] > 4) && (xpehh.Simium_Braz$XPEHH_Simium_Brazil[i]>0)) {xpehh.Simium_Braz$STATUT[i] <- "outlier"}  else {xpehh.Simium_Braz$STATUT[i] <- "background"}
+    }
+    
+    highlight<-subset(xpehh.Simium_Braz, xpehh.Simium_Braz$STATUT=="outlier")
+    write_tsv(as.data.frame(cbind(highlight$CHR, highlight$POSITION)), "xpehh_Simium_Braz.txt")
+    xpehh.Simium_Braz$CHR<-as.numeric(as.factor(xpehh.Simium_Braz$CHR))
+    
+ #Plot
+    xpehh.Simium_Braz$CHR<-as.numeric(as.factor(xpehh.Simium_Braz$CHR))
+  data_cum <-  xpehh.Simium_Braz %>% 
+    group_by(CHR) %>% 
+    summarise(max_bp = max(POSITION)) %>% 
+    mutate(bp_add = lag(cumsum(max_bp), default = 0)) %>% 
+    select(CHR, bp_add)
+   xpehh.Simium_Braz <-  xpehh.Simium_Braz %>% 
+    inner_join(data_cum, by = "CHR") %>% 
+    mutate(bp_cum = POSITION + bp_add)
+  
+  axis_set <-  xpehh.Simium_Braz %>% 
+    group_by(CHR) %>% 
+    summarize(center = median(bp_cum))
+  
+  highlight<-subset( xpehh.Simium_Braz,  xpehh.Simium_Braz$STATUT=="outlier")
+  
+  p1<-ggplot(xpehh.Simium_Braz, aes(x = bp_cum, y =LOGPVALUE,color = as_factor(CHR))) +
+    geom_point(alpha = 0.75) +
+    geom_hline(yintercept = 4, color = "grey40", linetype = "dashed") + 
+    scale_x_continuous(label = axis_set$CHR, breaks = axis_set$center) +
+    scale_color_manual(values = rep(c("lightskyblue", "lightsteelblue"), unique(length(axis_set$CHR))))+
+    labs(x = "Chromosomes", y = "-log(p-value)") + 
+    theme_minimal() +
+    theme( 
+      legend.position = "none",
+      panel.border = element_blank(),
+      panel.grid.major.x = element_blank(),
+      panel.grid.minor.x = element_blank(),
+      axis.text.x = element_text())
+  title<-paste0("XP-EHH : Simium and Brazil")
+  p2<-p1+geom_point(data=highlight, aes(x = bp_cum, y =LOGPVALUE), color = "firebrick1", alpha= 0.8)+ggtitle(title)
+p2
+```
+
+## *Rsb*
+
+Version: R v4.2.
+
+```{r}
+ scan_Simium <- read_delim("scan_Simium.txt", "\t", escape_double = FALSE, trim_ws = TRUE)
+  scan_Braz <- read_delim("scan_Brazil.txt", "\t", escape_double = FALSE, trim_ws = TRUE)
+    
+    rsb.Simium_Braz <- ines2rsb(scan_pop1 =  scan_Simium,
+                                 scan_pop2 =  scan_Braz,
+                                 popname1 = "Simium",
+                                 popname2 = "Brazil")
+    
+     rsb.Simium_Braz<-na.omit(rsb.Simium_Braz)
+    # make an outlier column in the data.frame (only SNPs that present a mark of selection in SAM : negative RSb value + significant p-value)
+    for (i in 1:length( rsb.Simium_Braz$LOGPVALUE)) {
+      if ((rsb.Simium_Braz$LOGPVALUE[i] > 4) && (rsb.Simium_Braz$RSB_Simium_Braz[i]>0)) {rsb.Simium_Braz$STATUT[i] <- "outlier"}  else {rsb.Simium_Braz$STATUT[i] <- "background"}
+    }
+    
+    highlight<-subset(rsb.Simium_Braz, rsb.Simium_Braz$STATUT=="outlier")
+    write_tsv(as.data.frame(cbind(highlight$CHR, highlight$POSITION)), "Rsb_Simium_Braz.txt")
+    rsb.Simium_Braz$CHR<-as.numeric(as.factor(rsb.Simium_Braz$CHR))
+    
+ #Plot
+    rsb.Simium_Braz$CHR<-as.numeric(as.factor(rsb.Simium_Braz$CHR))
+  data_cum <-  rsb.Simium_Braz %>% 
+    group_by(CHR) %>% 
+    summarise(max_bp = max(POSITION)) %>% 
+    mutate(bp_add = lag(cumsum(max_bp), default = 0)) %>% 
+    select(CHR, bp_add)
+   rsb.Simium_Braz <-  rsb.Simium_Braz %>% 
+    inner_join(data_cum, by = "CHR") %>% 
+    mutate(bp_cum = POSITION + bp_add)
+  
+  axis_set <-  rsb.Simium_Braz %>% 
+    group_by(CHR) %>% 
+    summarize(center = median(bp_cum))
+  
+  highlight<-subset( rsb.Simium_Braz,  rsb.Simium_Braz$STATUT=="outlier")
+  
+  p1<-ggplot(rsb.Simium_Braz, aes(x = bp_cum, y =LOGPVALUE,color = as_factor(CHR))) +
+    geom_point(alpha = 0.75) +
+    geom_hline(yintercept = 4, color = "grey40", linetype = "dashed") + 
+    scale_x_continuous(label = axis_set$CHR, breaks = axis_set$center) +
+    scale_color_manual(values = rep(c("lightskyblue", "lightsteelblue"), unique(length(axis_set$CHR))))+
+    labs(x = "Chromosomes", y = "-log(p-value)") + 
+    theme_minimal() +
+    theme( 
+      legend.position = "none",
+      panel.border = element_blank(),
+      panel.grid.major.x = element_blank(),
+      panel.grid.minor.x = element_blank(),
+      axis.text.x = element_text())
+  title<-paste0("Rsb : Simium and Brazil")
+  p2<-p1+geom_point(data=highlight, aes(x = bp_cum, y =LOGPVALUE), color = "firebrick1", alpha= 0.8)+ggtitle(title)
+p2
+```
+
+# Selection detection with Relate
+
+## Scan with Relate on all chromosomes
+
+Version: Relate v1.1.9.
+
+```{bash}
+ARR_CHR=(01 02 03 04 05 06 07 08 09 10 12 11 13 14) #Detecttion of selection is by chromosome
+for CHR in ${ARR_CHR[@]}
+do
+# Extract only the P. simium samples from the Relate files used for demography
+$PATH_TO_RELATE/bin/RelateExtract\
+                 --mode SubTreesForSubpopulation\
+                 --anc $path_data/popsizes/est_size_test_chr$CHR.anc \
+                 --mut $path_data/popsizes/est_size_test_chr$CHR.mut \
+                 --poplabels $path_data/simium.poplabels \
+                 --pop_of_interest simium \
+                 -o $path_data/simiumA_only_chr$CHR
+
+# Detect selection
+$PATH_TO_RELATE/scripts/DetectSelection/DetectSelection.sh \
+                 -i $path_data/simium_only_chr$CHR \
+                 -o $path_data/simium_selection_chr$CHR \
+                 -m 6.43333e-9 \
+                 --years_per_gen 0.18
+
+${PATH_TO_RELATE}/bin/RelateSelection \
+--mode Quality \
+-i $path_data/simium_only_chr$CHR \
+-o $path_data/simium_selection_chr$CHR
+done
+```
+
+## Read the data and plot
+
+Version: R v4.2.
+
+```{r}
+df_simium <- data.frame()
+library(relater)
+ARR_CHR=c("01","02","03","04","05","06","07","08","09","10","11","12","13","14")
+for (chr in ARR_CHR){
+output <- paste0("simium_selection_chr",chr)
+# parse files
+mut <- read.mut(paste0("simium_only_chr",chr, ".mut"))
+freq <- read.freq(paste0(output, ".freq"))
+sele <- read.sele(paste0(output, ".sele"))
+qual <- read.qual(paste0(output, ".qual"))
+# combine these into a single data frame called allele_ages
+allele_ages <- get.allele_ages(mut = mut, freq = freq, sele = sele)
+# use the *qual file to filter out SNPs mapping to "bad" trees
+allele_ages <- filter.allele_ages(allele_ages, qual)
+allele_ages <- subset(allele_ages, !is.na(pvalue))
+print(head(allele_ages[order(allele_ages$pvalue),]))
+#write_tsv(allele_ages, paste0("./Data/results_selection_chr", chr,".tsv"))
+df_simium<-rbind(df_simium,allele_ages)
+
+}
+df_simium$mid_age<-as.numeric(rowMeans(df_simium[,3:4]))
+
+# Create the file to annotate the SNPs
+CHR<- rep(NA, nrow(df_simium))
+CHR[grep("PvP01_01_v1", df_simium$ID)] <- "PvP01_01_v1"
+CHR[grep("PvP01_02_v1", df_simium$ID)] <- "PvP01_02_v1"
+CHR[grep("PvP01_03_v1", df_simium$ID)] <- "PvP01_03_v1"
+CHR[grep("PvP01_04_v1", df_simium$ID)] <- "PvP01_04_v1"
+CHR[grep("PvP01_05_v1", df_simium$ID)] <- "PvP01_05_v1"
+CHR[grep("PvP01_06_v1", df_simium$ID)] <- "PvP01_06_v1"
+CHR[grep("PvP01_07_v1", df_simium$ID)] <- "PvP01_07_v1"
+CHR[grep("PvP01_08_v1", df_simium$ID)] <- "PvP01_08_v1"
+CHR[grep("PvP01_09_v1", df_simium$ID)] <- "PvP01_09_v1"
+CHR[grep("PvP01_10_v1", df_simium$ID)] <- "PvP01_10_v1"
+CHR[grep("PvP01_11_v1", df_simium$ID)] <- "PvP01_11_v1"
+CHR[grep("PvP01_12_v1", df_simium$ID)] <- "PvP01_12_v1"
+CHR[grep("PvP01_13_v1", df_simium$ID)] <- "PvP01_13_v1"
+CHR[grep("PvP01_14_v1", df_simium$ID)] <- "PvP01_14_v1"
+df_simium<-cbind(df_simium, CHR)
+df_simium$pvalue<--df_simium$pvalue
+  highlight<-subset(df_simium,  df_simium$pvalue>=4)
+write_tsv(as.data.frame(cbind(highlight$CHR, highlight$BP)), "./Data/Relate_simium.txt")
+
+# Format the file to plot
+CHROM<- rep(NA, nrow(df_simium))
+CHROM[grep("PvP01_01_v1", df_simium$ID)] <- 1
+CHROM[grep("PvP01_02_v1", df_simium$ID)] <- 2
+CHROM[grep("PvP01_03_v1", df_simium$ID)] <- 3
+CHROM[grep("PvP01_04_v1", df_simium$ID)] <- 4
+CHROM[grep("PvP01_05_v1", df_simium$ID)] <- 5
+CHROM[grep("PvP01_06_v1", df_simium$ID)] <- 6
+CHROM[grep("PvP01_07_v1", df_simium$ID)] <- 7
+CHROM[grep("PvP01_08_v1", df_simium$ID)] <- 8
+CHROM[grep("PvP01_09_v1", df_simium$ID)] <- 9
+CHROM[grep("PvP01_10_v1", df_simium$ID)] <- 10
+CHROM[grep("PvP01_11_v1", df_simium$ID)] <- 11
+CHROM[grep("PvP01_12_v1", df_simium$ID)] <- 12
+CHROM[grep("PvP01_13_v1", df_simium$ID)] <- 13
+CHROM[grep("PvP01_14_v1", df_simium$ID)] <- 14
+df_simium<-cbind(df_simium, CHROM)
+
+data_cum <-  df_simium %>% 
+    group_by(CHROM) %>% 
+    summarise(max_bp = max(BP)) %>% 
+    mutate(bp_add = lag(cumsum(max_bp), default = 0)) %>% 
+    select(CHROM, bp_add)
+   df_simium <-  df_simium %>% 
+    inner_join(data_cum, by = "CHROM") %>% 
+    mutate(bp_cum = BP + bp_add)
+  
+  axis_set <-  df_simium %>% 
+    group_by(CHROM) %>% 
+    summarize(center = median(bp_cum))
+  
+  highlight<-subset(df_simium,  df_simium$pvalue>=4)
+  
+  p1<-ggplot(df_simium, aes(x = bp_cum, y =pvalue,color = as_factor(CHROM))) +
+    geom_point(alpha = 0.75) +
+    geom_hline(yintercept = 4, color = "grey40", linetype = "dashed") + 
+    scale_x_continuous(label = axis_set$CHROM, breaks = axis_set$center) +
+    scale_color_manual(values = rep(c("lightskyblue", "lightsteelblue"), unique(length(axis_set$CHROM))))+
+    labs(x = "Chromosomes", y = "-log(p-value)") + 
+    theme_minimal() +
+    theme( 
+      legend.position = "none",
+      panel.border = element_blank(),
+      panel.grid.major.x = element_blank(),
+      panel.grid.minor.x = element_blank(),
+      axis.text.x = element_text())
+  title<-paste0("Selection with Relate for all P. simium")
+  p2<-p1+geom_point(data=highlight, aes(x = bp_cum, y =pvalue), color = "firebrick1",  alpha= 0.8)+ggtitle(title)
+p2
+```
+
+# Genome scans with *PBS*
+
+Calculate the FST for 3 populations. We need the simium samples. The 2 others populations can be : Colombia and Brazil.
+
+Here I show the code only for the cluster RJ, but it is the same with SP.
+
+## Calculate the FST
+
+Version: ANGSD v0.940.
+
+```{bash}
+# Create input
+angsd -b bam_Simium_RJ.txt  -anc PL.ancestral.fa.gz -out Simium_RJ -dosaf 1 -gl 1 -nThreads 8 -minMapQ 20 -minQ 20 -minInd 5 -rf core_regions.txt
+angsd -b bam_Brazil.txt  -anc PL.ancestral.fa.gz -out Brazil -dosaf 1 -gl 1 -nThreads 8 -minMapQ 20 -minQ 20 -minInd 5 -rf core_regions.txt
+angsd -b bam_Colombia.txt  -anc PL.ancestral.fa.gz -out Colombia -dosaf 1 -gl 1 -nThreads 8 -minMapQ 20 -minQ 20 -minInd 5 -rf core_regions.txt
+
+#calculate all pairwise 2dsfs's
+${path_to_ANGSD}/angsd-0.940/bin/realSFS Simium_RJ.saf.idx Brazil.saf.idx -P 8 > Simium_RJ.Brazil.ml
+${path_to_ANGSD}/angsd-0.940/bin/realSFS Simium_RJ.saf.idx Colombia.saf.idx -P 8 > Simium_RJ.Colombia.ml
+${path_to_ANGSD}/angsd-0.940/bin/realSFS Colombia.saf.idx Brazil.saf.idx -P 8 > Colombia.Brazil.ml
+
+# Calculate FST/PBS
+${path_to_ANGSD}/angsd-0.940/bin/realSFS fst index Simium_RJ.saf.idx Colombia.saf.idx Brazil.saf.idx -sfs Simium_RJ.Colombia.ml -sfs Simium_RJ.Brazil.ml -sfs Colombia.Brazil.ml -fstout Simium_RJ.LAM -whichFst 1
+
+# Split per sliding windows
+${path_to_ANGSD}/angsd-0.940/bin/realSFS fst stats2 Simium_RJ.LAM.fst.idx -win 1000 -step 500 > Simium_RJ.LAM.win1000
+```
+
+## Read the data and plot
+
+Version: R v4.2.
+
+```{r}
+library(tidyverse)
+simium_RJ_LAM <- read_delim("Simium_RJ.LAM.win1000", 
+    delim = "\t", escape_double = FALSE, 
+    trim_ws = TRUE)
+
+# Exclude positions whose PBS result was equal to NA
+simium_RJ_LAM <-simium_RJ_LAM %>% drop_na(PBS0)
+
+# Exclude positions whose n sites is below 20
+simium_RJ_LAM_data <- subset(simium_RJ_LAM, simium_RJ_LAM$Nsites>=20)
+
+# Convert positions with estimates from PBS < 0 to = 0
+simium_RJ_LAM_data[,c(8:10)][simium_RJ_LAM_data[,c(8:10)]<0] <- 0
+
+## Plot
+highlight<-subset(simium_RJ_LAM_data,  simium_RJ_LAM_data$PBS0>quantile(simium_RJ_LAM_data$PBS0, 0.999))
+write_tsv(as.data.frame(cbind(highlight$chr, highlight$midPos)), "PBS_SimiumRJ.LAM.1000.txt")
+
+    simium_RJ_LAM_data$chr <-as.numeric(as.factor(simium_RJ_LAM_data$chr))
+simium_RJ_LAM_data$midPos<-as.numeric(simium_RJ_LAM_data$midPos)
+  data_cum <-  simium_RJ_LAM_data %>% 
+    group_by(chr) %>% 
+    summarise(max_bp = max(midPos)) %>% 
+    mutate(bp_add = lag(cumsum(max_bp), default = 0)) %>% 
+    select(chr, bp_add)
+   simium_RJ_LAM_data <-  simium_RJ_LAM_data %>% 
+    inner_join(data_cum, by = "chr") %>% 
+    mutate(bp_cum = midPos + bp_add)
+  
+  axis_set <-  simium_RJ_LAM_data %>% 
+    group_by(chr) %>% 
+    summarize(center = median(bp_cum))
+  
+  highlight<-subset(simium_RJ_LAM_data,  simium_RJ_LAM_data$PBS0>quantile(simium_RJ_LAM_data$PBS0, 0.999))
+  
+  p1<-ggplot(simium_RJ_LAM_data, aes(x = bp_cum, y =PBS0,color = as_factor(chr))) +
+    geom_point(alpha = 0.75) + geom_hline(yintercept = quantile(simium_RJ_LAM_data$PBS0, 0.999), color = "grey40", linetype = "dashed") + 
+    scale_x_continuous(label = axis_set$chr, breaks = axis_set$center) +
+    scale_color_manual(values = rep(c("lightskyblue", "lightsteelblue"), unique(length(axis_set$chr))))+
+    labs(x = "Chromosomes", y = "PBS") + 
+    theme_minimal() +
+    theme( 
+      legend.position = "none",
+      panel.border = element_blank(),
+      panel.grid.major.x = element_blank(),
+      panel.grid.minor.x = element_blank(),
+      axis.text.x = element_text())
+  title<-paste0("PBS Simium RJ (Colombia and Brazil)")
+  p2<-p1+geom_point(data=highlight, aes(x = bp_cum, y =PBS0), color = "firebrick1", alpha= 0.8)+ggtitle(title)
+p2
+```
+
+# Identification of the genes
+
+## Do SNPs with significant selection signals fall into gene coding sequences (CDS)?
+
+Version: bedtools v2.31.1.
+
+```{bash}
+# For haplotype-based test and Relate, create a "false" interval equal to one
+awk 'BEGIN{FS=OFS="\t"}{ print $1,$2-1,$2 }' iHS_Simium.txt | awk NR\>1 > ./scan/IHS_simium.txt
+awk 'BEGIN{FS=OFS="\t"}{ print $1,$2-1,$2 }' xpehh_Simium_Braz.txt | awk NR\>1 > ./scan/xpehh_Simium_Braz.txt
+awk 'BEGIN{FS=OFS="\t"}{ print $1,$2-1,$2 }' Rsb_Simium_Braz.txt | awk NR\>1 > ./scan/Rsb_Simium_Braz.txt
+awk 'BEGIN{FS=OFS="\t"}{ print $1,$2-1,$2 }' Relate_simiumA.txt | awk NR\>1 > ./scan/Relate_Simium.txt
+
+# For PBS, create an interval of 1kb around the median position
+awk 'BEGIN{FS=OFS="\t"}{ print $1,$2-500,$2+500 }' PBS_SimiumRJ.LAM.1000.txt | awk NR\>1 > ./scan/PBS_SimiumRJ.1000.txt
+awk 'BEGIN{FS=OFS="\t"}{ print $1,$2-500,$2+500 }' PBS_SimiumSP.LAM.1000.txt | awk NR\>1 > ./scan/PBS_SimiumSP.1000.txt
+
+# See where these intervals fall into the annotated genome
+conda activate bedtools
+bedtools intersect -wb -a PlasmoDB-50_PvivaxP01.gff \
+-b ./scan/IHS_simium.txt./scan/xpehh_Simium_Braz.txt ./scan/Rsb_Simium_Braz.txt ./scan/Relate_Simium.txt ./scan/PBS_SimiumRJ.1000.txt ./scan/PBS_SimiumSP.1000.txt \
+-names iHS XPEHH_BRAZ RSB_BRAZ RELATE PBS_RJ PBS_SP > gene_ID.txt
+```
+
+## Get gene info
+
+Version: R v4.2.
+
+```{r}
+gene_ID <- read.delim("./Data/gene_ID.txt", header=FALSE)
+gene_ID <- gene_ID[,-c(2,6,7,8,11,12,13)]
+colnames(gene_ID)<-c("chr","type","start","end","annotation","test")
+gene_ID<-subset(gene_ID, gene_ID$type=="CDS")
+gene_ID<-unique(gene_ID)
+gene_ID$ID<-substr(gene_ID$annotation, 4, 16)
+
+test.gene<-unique(gene_ID[,c(1,6,7)])
+# Output the gene list to have information from PlasmoDB
+ID<-unique(gene_ID$ID)
+ output<-paste0("./Data/ID_list.txt")
+    write_tsv(as.data.frame(ID), file = output, col_names = F)
+```
