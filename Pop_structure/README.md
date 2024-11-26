@@ -7,7 +7,7 @@ Margaux Lefebvre
 
 ## LD-pruning
 
-Version: samtools v1.10, angsd v0.940, python v3.8.12, R v4.2.
+Version: angsd v0.940, python v3.8.12, R v4.2.
 
 NB : I removed the outgroup, since it doesn’t make sense to keep *P.
 vivax-like* samples.
