@@ -239,7 +239,7 @@ IBD_all <-
     map_dfr(~read_table(.), show_col_types=F)
 
 # Add meta-informations
-metadata<-read_delim("./Data/metadata_vivaxsimium_fws.csv", 
+metadata<-read_delim("./Data/metadata_vivaxsimium.csv", 
      delim = "\t", escape_double = FALSE, 
     trim_ws = TRUE, show_col_types = FALSE)
 metadata_vivax<-metadata[,c(1,2,9,16)]
