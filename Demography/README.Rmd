@@ -56,7 +56,7 @@ for (pop in kept_populations$country){
 
 Of course, *P. simium* is considered as a separate population from *P. vivax*.
 
-# Calculation of pi
+## Calculation of pi
 
 Version: bcftools v1.16, pixy v01.2.7.
 
@@ -78,7 +78,7 @@ pixy --stats pi --vcf $POP.10.allsites.vcf.gz --populations $POP.10.pop.txt --wi
 done
 ```
 
-# Plot and test for significant difference
+## Plot and test for significant difference
 
 Version: R v4.2.
 
