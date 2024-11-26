@@ -115,3 +115,83 @@ python ./vcf2phylip/vcf2phylip.py -i VivaxSimium_core.snpbi_filtered.ploidy2.vcf
 # ML tree
 iqtree -s tree_allsamples.min4.phy -m MFP+ASC -T 24 --prefix tree_allsamples -o p1537.PL.Cameroon -B 1000 -alrt 1000 -st DNA #MFP+ASC = model finder for dataset with only variable sites
 ```
+
+# IBD Network
+
+## Create the dataset and calculate the IBD
+
+``` bash
+mkdir hmm_format
+cd hmm_format
+
+bcftools annotate -x INFO,^FORMAT/GT VivaxSimium_filtered_final.ploidy2.vcf.gz | grep -v "##" |cut -d$'\t' -f1-2,10- > temp0
+
+sed 's/0\/0/0/g' temp0 > temp1
+sed 's/1\/1/1/g' temp1 > temp2
+sed 's/1\/0/-1/g' temp2 > temp3
+sed 's/0\/1/-1/g' temp3 > temp4
+sed 's/0\/1/-1/g' temp4 > temp5
+sed 's/.\/./-1/g' temp5 > temp6
+sed 's/PvP01_\([0-9][0-9]*\)_v1/\1/g' temp6 > temp7
+sed 's/vPvP01_\([0-9][0-9]*\)_v1/\1/g' temp7 > all_hmm.pf
+hmmIBD -i all_hmm.pf -o ../IBD
+```
+
+## Read the data and plot the network
+
+``` r
+library(readr)
+library(igraph)
+IBD_df <- read_delim("./IBD.hmm_fract.txt", 
+    delim = "\t", escape_double = FALSE, 
+    trim_ws = TRUE)
+
+# Unique nodes
+nodes <- sort(unique(c(IBD_df$sample1, IBD_df$sample2)))
+
+# Create an empty symmetric matrix
+mat <- matrix(0, nrow = length(nodes), ncol = length(nodes))
+rownames(mat) <- colnames(mat) <- nodes
+
+# Fill in the values from the dataset
+for (i in 1:nrow(IBD_df)) {
+  from <- IBD_df$sample1[i]
+  to <- IBD_df$sample2[i]
+  value <- IBD_df$fract_sites_IBD[i]
+  mat[from, to] <- value
+  mat[to, from] <- value
+}
+
+# Keep only when IBD > 0.05
+mat[mat<0.05] <- 0
+
+# Make an Igraph object from this matrix:
+network <- graph_from_adjacency_matrix( mat, weighted=T, mode="undirected", diag=F)
+
+# Basic chart
+plot(network, vertex.size=10, vertex.label=NA) 
+E(network)$width <- log(E(network)$weight*100)
+plot(network, vertex.size=10, vertex.label=NA) 
+
+# Add colors
+list_samples<-as.data.frame(V(network))
+list_samples$sample_ID<-rownames(list_samples)
+# add meta information
+library(tidyverse)
+metadata_simium <- read_delim("./metadata_vivaxsimium.csv", 
+    delim = "\t", quote = "\\\"", escape_double = FALSE, 
+    trim_ws = TRUE)
+metadata_simium<-metadata_simium[,c(2,3,18,17)]
+colnames(metadata_simium)<-c("species","host","country","sample_ID")
+total_info<-inner_join(list_samples,metadata_simium)
+
+colrs<-c("#d84880","#67d04a","#943fd3","#b4c43f","#635ec7","#cb9f35","#be46ac","#74ba6f","#c53c3b","#62bdae", "#de6a30","#76a5d1","#81552e","#c891cd","#476939","#564f80","#c5ac78","#863a54","#d68a89")
+
+V(network)$color <- colrs[as.factor(total_info$country)]
+
+plot(network, vertex.size=5, vertex.label=NA,edge.curved=0.2, edge.color="#d3d3d3",arrow.mode=0) 
+
+# See which color correspond to which country
+legend_col<-unique(cbind(total_info$country,colrs[as.factor(total_info$country)]))
+legend_col
+```
