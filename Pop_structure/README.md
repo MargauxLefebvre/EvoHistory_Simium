@@ -54,8 +54,6 @@ pruned_snp_list <- snp_list[snp_list$position %in% pruned_position, ]
 write.table(pruned_snp_list, paste0("PCA_coregenome.snp.LDpruned.list"), col.names = F, row.names = F, quote = F, sep = "\t")
 ```
 
-We keep 247,890 SNPs.
-
 ## PCA with PCAngsd
 
 Version: angsd v0.940, PCAngsd v0.98.
@@ -194,4 +192,84 @@ plot(network, vertex.size=5, vertex.label=NA,edge.curved=0.2, edge.color="#d3d3d
 # See which color correspond to which country
 legend_col<-unique(cbind(total_info$country,colrs[as.factor(total_info$country)]))
 legend_col
+```
+
+# Population structure for *P. simium* only
+
+## PCA
+
+Version: plink v1.90, vcftools v0.1.16.
+
+``` bash
+# Subset the P. simium samples only
+vcftools --gzvcf VivaxSimium_filtered_final.ploidy2.vcf.gz --keep imium.samples.txt --min-alleles 2 --max-alleles 2 --recode --stdout | bgzip -c > Simium_only.ploidy2.vcf.gz
+
+# LD pruning
+plink --vcf Simium_only.ploidy2.vcf.gz --double-id --allow-extra-chr \
+--set-missing-var-ids @:# \
+--indep-pairwise 50 10 0.5 --out Prune
+
+# PCA
+plink --vcf Simium_only.ploidy2.vcf.gz --double-id --allow-extra-chr --set-missing-var-ids @:# \
+--extract Prune.prune.in --maf 0.05 \
+--pca --out PCA_plink_simium
+```
+
+## ADMIXTURE
+
+Version: plink v1.90, vcftools v0.1.16, ADMIXTURE v1.3.0, python
+v3.8.12.
+
+``` bash
+# Subset the P. simium samples only
+vcftools --gzvcf VivaxSimium_filtered_final.ploidy2.vcf.gz --keep imium.samples.txt --min-alleles 2 --max-alleles 2 --recode --stdout | bgzip -c > Simium_only.ploidy2.vcf.gz
+
+# LD pruning
+plink --vcf Simium_only.ploidy2.vcf.gz --double-id --allow-extra-chr \
+--set-missing-var-ids @:# \
+--indep-pairwise 50 10 0.5 --out Prune
+
+# Create input
+plink --vcf Simium_only.ploidy2.vcf.gz --double-id --allow-extra-chr --set-missing-var-ids @:# \
+--extract Prune.prune.in --maf 0.05 \
+--make-bed --out ./ADMIXTURE/input_admixture_simium
+
+# Change the format for ADMIXTURE
+awk '{$1=0;print $0}' ./ADMIXTURE/input_admixture_simium.bim > ./ADMIXTURE/input_admixture_simium.bim.tmp
+mv ./ADMIXTURE/input_admixture_simium.bim.tmp ./ADMIXTURE/input_admixture_simium.bim
+
+for r in {1..10}
+do
+for k in {1..5}
+do
+ admixture --cv -s time -j20 ./ADMIXTURE/input_admixture_simium.bed $k >> ./ADMIXTURE/log_${r}_${k}_simium.out
+ mv ./ADMIXTURE/input_admixture_simium.$k.Q ./ADMIXTURE/input_admixture_simium.$r.$k.Q
+ mv ./ADMIXTURE/input_admixture_simium.$k.P ./ADMIXTURE/input_admixture_simium.$r.$k.P
+done
+done
+
+# Extract the CV error value
+grep "CV" ./ADMIXTURE/*_simium.out | awk '{print $3,$4}' | sed -e 's/(//;s/)//;s/://;s/K=//'  > ./ADMIXTURE/K_determination_simium.cv.error
+```
+
+Read the cv-error
+
+``` r
+data_K <- read_table("./ADMIXTURE/K_determination_simium.cv.error", col_names = FALSE)
+
+names(data_K)[1] <- "K"
+names(data_K)[2] <- "CVE"
+
+ggplot(data=data_K,aes(x=K,y=CVE, group=K))+
+  geom_jitter(width = 0.2, size=0.4,colour="grey60")+
+  geom_boxplot()+
+  labs(x="K (cluster number)",y="Cross-validation error")+
+  scale_x_continuous(breaks =c(1,2, 3, 4, 5, 6, 7, 8, 9, 10))+
+  theme_bw()
+```
+
+The visualization was done with pong:
+
+``` bash
+pong -m file_map.simium.txt -i ind2pop.simium.txt -n sample_order.simium.txt -l color.txt 
 ```

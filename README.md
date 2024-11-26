@@ -23,6 +23,8 @@ The languages used are mainly bash and R. For each part, software and version ar
 -   [Ancestry plots]()
 -   [Tree of the samples (maximum likelihood)]()
 -   [IBD Network]()
+-   [Population structure for *P. simium* only]()
+
 
 ## [Population graphs and *f*-statistics]()
 
