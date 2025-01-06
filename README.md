@@ -1,11 +1,11 @@
 # Genomic Insights into the Host shifts and Genetic Exchange Between *Plasmodium vivax* and *Plasmodium simium*
 
-This repository is for this paper:
+This repository is for this paper (preprint):
 
-**Title to decide**, M. J. M. Lefebvre, F. Degrugillier, C. Arnathau, C. González, S. Rondón, A. Chaves, J. Benavides, A. Scarpellini Campos, E. dos Santos, R. Huff, C. M. Dornelles da Silva, E. Vanderhoeven, O. Duron, B. De Thoisy, M. C. Fontaine, F. Prugnolle & V. Rougeron.
+**Genomic insights into *Plasmodium vivax* and *Plasmodium simium* host shifts in Latin America**, Margaux J. M. Lefebvre, Fanny Degrugillier, Céline Arnathau, Camila González, Silvia Rondón, Andrés Link, A. Chaves, Julio A. Benavides, Aline Alves Scarpellini Campos, Edmilson dos Santos, Rosana Huff, Cláudia Maria Dornelles Silva, Ezequiel Vanderhoeven, Benoit De Thoisy, Michael C. Fontaine, Franck Prugnolle, Virginie Rougeron
 
 
-doi:
+  doi: [https://doi.org/10.1101/2024.12.19.629455](https://doi.org/10.1101/2024.12.19.629455).
 
 The languages used are mainly bash and R. For each part, software and version are specified.
 
