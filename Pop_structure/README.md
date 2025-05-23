@@ -1,7 +1,7 @@
 Population structure
 ================
 Margaux Lefebvre
-2024-11-26
+2025-05-23
 
 # PCA
 
@@ -198,78 +198,90 @@ legend_col
 
 ## PCA
 
-Version: plink v1.90, vcftools v0.1.16.
+### LD-pruning
+
+Version: angsd v0.940, python v3.8.12, R v4.2.
 
 ``` bash
-# Subset the P. simium samples only
-vcftools --gzvcf VivaxSimium_filtered_final.ploidy2.vcf.gz --keep imium.samples.txt --min-alleles 2 --max-alleles 2 --recode --stdout | bgzip -c > Simium_only.ploidy2.vcf.gz
+# Create Beagle input for the pruning
+angsd -b list_bams.simimum.txt -ref P.vivax-PvP01_reference_genome.fasta -out PCA_simium \
+        -rf core_regions.txt \
+        -minMapQ 20 -minQ 20 -minInd 5 -setMinDepth 5 -setMaxDepthInd 152 -doCounts 1 \
+        -GL 2 -doGlf 2 -nThreads 8 -doMajorMinor 1 -SNP_pval 1e-6 -doMaf 1 -minMaf 0.06 #maf to remove the singletons
 
-# LD pruning
-plink --vcf Simium_only.ploidy2.vcf.gz --double-id --allow-extra-chr \
---set-missing-var-ids @:# \
---indep-pairwise 50 10 0.5 --out Prune
+# Prepare a pos file with the mafs filre
+zcat PCA_simium.mafs.gz | cut -f 1,2 |  sed 's/:/_/g'| gzip > PCA_simium.pos.gz
 
-# PCA
-plink --vcf Simium_only.ploidy2.vcf.gz --double-id --allow-extra-chr --set-missing-var-ids @:# \
---extract Prune.prune.in --maf 0.05 \
---pca --out PCA_plink_simium
+N_lines=$(zcat PCA_simium.pos.gz | wc -l)
+let N_pos=N_lines-1 #number of sites
+
+ngsLD \
+--geno PCA_simium.beagle.gz \
+--posH PCA_simium.pos.gz \
+--probs \
+--n_ind 19 \
+--n_sites $N_pos \
+--max_kb_dist 1 \
+--n_threads 8 \
+--out PCA_simium.ld
+
+python ./scripts/prune_ngsLD.py \
+--input PCA_simium.ld  \
+--max_dist 5000 \
+--min_weight 0.5 \
+--output PCA_simium.snp.unlinked.id
 ```
 
-## ADMIXTURE
-
-Version: plink v1.90, vcftools v0.1.16, ADMIXTURE v1.3.0, python
-v3.8.12.
-
-``` bash
-# Subset the P. simium samples only
-vcftools --gzvcf VivaxSimium_filtered_final.ploidy2.vcf.gz --keep imium.samples.txt --min-alleles 2 --max-alleles 2 --recode --stdout | bgzip -c > Simium_only.ploidy2.vcf.gz
-
-# LD pruning
-plink --vcf Simium_only.ploidy2.vcf.gz --double-id --allow-extra-chr \
---set-missing-var-ids @:# \
---indep-pairwise 50 10 0.5 --out Prune
-
-# Create input
-plink --vcf Simium_only.ploidy2.vcf.gz --double-id --allow-extra-chr --set-missing-var-ids @:# \
---extract Prune.prune.in --maf 0.05 \
---make-bed --out ./ADMIXTURE/input_admixture_simium
-
-# Change the format for ADMIXTURE
-awk '{$1=0;print $0}' ./ADMIXTURE/input_admixture_simium.bim > ./ADMIXTURE/input_admixture_simium.bim.tmp
-mv ./ADMIXTURE/input_admixture_simium.bim.tmp ./ADMIXTURE/input_admixture_simium.bim
-
-for r in {1..10}
-do
-for k in {1..5}
-do
- admixture --cv -s time -j20 ./ADMIXTURE/input_admixture_simium.bed $k >> ./ADMIXTURE/log_${r}_${k}_simium.out
- mv ./ADMIXTURE/input_admixture_simium.$k.Q ./ADMIXTURE/input_admixture_simium.$r.$k.Q
- mv ./ADMIXTURE/input_admixture_simium.$k.P ./ADMIXTURE/input_admixture_simium.$r.$k.P
-done
-done
-
-# Extract the CV error value
-grep "CV" ./ADMIXTURE/*_simium.out | awk '{print $3,$4}' | sed -e 's/(//;s/)//;s/://;s/K=//'  > ./ADMIXTURE/K_determination_simium.cv.error
-```
-
-Read the cv-error
+Generate an LD-pruned SNP list:
 
 ``` r
-data_K <- read_table("./ADMIXTURE/K_determination_simium.cv.error", col_names = FALSE)
+pruned_position <- as.integer(gsub(paste0("PvP01_[0-1][0-9]_v1:"), "", readLines(paste0("PCA_simium.snp.unlinked.id"))))
 
-names(data_K)[1] <- "K"
-names(data_K)[2] <- "CVE"
+snp_list <- read.table(paste0("PCA_simium.mafs.gz"), stringsAsFactors = F, header = T)[,1:4]
 
-ggplot(data=data_K,aes(x=K,y=CVE, group=K))+
-  geom_jitter(width = 0.2, size=0.4,colour="grey60")+
-  geom_boxplot()+
-  labs(x="K (cluster number)",y="Cross-validation error")+
-  scale_x_continuous(breaks =c(1,2, 3, 4, 5, 6, 7, 8, 9, 10))+
-  theme_bw()
+pruned_snp_list <- snp_list[snp_list$position %in% pruned_position, ]
+  
+write.table(pruned_snp_list, paste0("PCA_simium.snp.LDpruned.list"), col.names = F, row.names = F, quote = F, sep = "\t")
+```
+
+### PCA with PCAngsd
+
+Version: angsd v0.940, PCAngsd v0.98.
+
+``` bash
+# Create input
+angsd sites index PCA_simium.snp.LDpruned.list # mandatory
+
+angsd -b list_bams.simimum.txt -ref P.vivax-PvP01_reference_genome.fasta -out PCA_simium_total \
+        -rf core_regions.txt \
+        -minMapQ 20 -minQ 20 -minInd 5 -setMinDepth 5 -setMaxDepthInd 106 -doCounts 1 \
+        -GL 2 -doGlf 2 -nThreads 8 -doMajorMinor 1 -doMajorMinor 3 -doMAF 1 -doPost 1 -doIBS 1 -doCov 1 -makeMatrix 1 -sites PCA_simium.snp.LDpruned.list
+        
+# Calculate the PCA with PCAngsd
+pcangsd -b PCA_simium_total.beagle.gz -o PCA_simium.mat
+```
+
+### Ancestry plots
+
+Version: PCAngsd v0.98, pong v1.5.
+
+Ancestry plots are inferred with PCAngsd and the input file is the same
+as for PCA.
+
+According to [Meisner and Albrechtsen](10.1534/genetics.118.30133), the
+best K is determined by 1+ D (the optimal number of principal
+components). D would be equal to 1 (determined by the elbow
+(broken-stick) method), so K=2.
+
+``` bash
+for k in {2..16}
+do
+ pcangsd -b PCA_simium_total.beagle.gz --admix --admix_K $k -o ancestry_simium
+done
 ```
 
 The visualization was done with pong:
 
 ``` bash
-pong -m file_map.simium.txt -i ind2pop.simium.txt -n sample_order.simium.txt -l color.txt 
+pong -m file_map.txt -i ind2pop.txt -n simium_order.txt -l color.txt 
 ```
