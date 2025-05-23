@@ -2,10 +2,8 @@
 
 This repository is for this paper:
 
-**Title to decide**, M. J. M. Lefebvre, F. Degrugillier, C. Arnathau, C. González, S. Rondón, A. Chaves, J. Benavides, A. Scarpellini Campos, E. dos Santos, R. Huff, C. M. Dornelles da Silva, E. Vanderhoeven, O. Duron, B. De Thoisy, M. C. Fontaine, F. Prugnolle & V. Rougeron.
-
-
-doi:
+**Genomic insights into host shifts between *Plasmodium vivax* and *Plasmodium simium* in Latin America**,
+Margaux J. M. Lefebvre, Fanny Degrugillier, Céline Arnathau, Camila González, Silvia Rondón, Andrés Link, Andrea Chaves, Julio A. Benavides, Aline Alves Scarpellini Campos, Edmilson dos Santos, Rosana Huff, Cláudia Maria Dornelles Silva, Ezequiel Vanderhoeven, Benoit De Thoisy, Michael C. Fontaine, Franck Prugnolle, Virginie Rougeron. *Preprint*. doi: [https://doi.org/10.1101/2024.12.19.629455](https://doi.org/10.1101/2024.12.19.629455)
 
 The languages used are mainly bash and R. For each part, software and version are specified.
 
